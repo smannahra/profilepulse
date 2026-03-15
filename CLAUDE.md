@@ -44,6 +44,7 @@ Sourced from `package.json` (actual installed versions):
 | @prisma/adapter-pg | ^7.5.0 |
 | pg | ^8.20.0 |
 | @types/pg | ^8.18.0 |
+| @anthropic-ai/sdk | ^0.78.0 |
 | recharts | ^3.8.0 |
 | papaparse | ^5.5.3 |
 | @types/papaparse | ^5.5.2 |
@@ -65,6 +66,12 @@ See `lib/prisma.ts` for the correct pattern.
 (`@tailwind base/components/utilities` + HSL CSS variables). Do NOT use
 Tailwind v4 syntax (`@import "shadcn/tailwind.css"`, `oklch` colours) — it breaks the build.
 
+**Anthropic SDK note:** `new Anthropic()` auto-reads `ANTHROPIC_API_KEY` from the environment.
+Model used throughout: `claude-sonnet-4-6`. All AI calls are server-side only (API routes).
+
+**shadcn Button note:** The installed Button component does NOT support the `asChild` prop.
+Use `<Link>` with Tailwind classes directly for link-styled buttons instead.
+
 ---
 
 ## 4. Folder Structure
@@ -75,21 +82,32 @@ D:\ProfilePulse\
 │   ├── layout.tsx                    # Root layout — sets <html> and page title
 │   ├── page.tsx                      # Root route — redirects to /dashboard
 │   ├── globals.css                   # Tailwind v3 base styles + shadcn HSL vars
+│   ├── api/                          # All API routes (created Session 2)
+│   │   ├── profile/
+│   │   │   └── route.ts              # GET + POST /api/profile — load/save user record
+│   │   ├── import/
+│   │   │   └── route.ts              # POST /api/import — LinkedIn CSV import via papaparse
+│   │   ├── trends/
+│   │   │   └── route.ts              # GET /api/trends — cached or ?refresh=true → Anthropic
+│   │   └── post-ideas/
+│   │       └── route.ts              # GET /api/post-ideas — cached or ?refresh=true → Anthropic
 │   └── dashboard/
 │       ├── layout.tsx                # Dashboard shell: sidebar + topbar wrapper
-│       ├── page.tsx                  # /dashboard — greeting, stat cards, quick actions
+│       ├── page.tsx                  # /dashboard — real DB stats, quick-action link buttons
 │       ├── profile/
-│       │   └── page.tsx              # /dashboard/profile — profile setup form
+│       │   └── page.tsx              # /dashboard/profile — form wired to /api/profile
 │       ├── trends/
-│       │   └── page.tsx              # /dashboard/trends — trending topics table
+│       │   └── page.tsx              # /dashboard/trends — live data, Refresh Trends button
 │       ├── post-ideas/
-│       │   └── page.tsx              # /dashboard/post-ideas — original ideas + reposts
+│       │   └── page.tsx              # /dashboard/post-ideas — live data, Generate Ideas button
+│       ├── import/
+│       │   └── page.tsx              # /dashboard/import — drag-and-drop CSV upload UI
 │       └── analytics/
-│           └── page.tsx              # /dashboard/analytics — recharts placeholder charts
+│           └── page.tsx              # /dashboard/analytics — recharts charts (still mock data)
 │
 ├── components/
 │   ├── dashboard/
-│   │   ├── sidebar.tsx               # Fixed left sidebar, nav items, red dot badge on Trends
+│   │   ├── sidebar.tsx               # Fixed left sidebar — 6 nav items (Import Data added S2)
 │   │   └── topbar.tsx                # Top header bar with app name + Sync Now button
 │   └── ui/                           # shadcn/ui components (do not manually edit)
 │       ├── badge.tsx
@@ -102,6 +120,7 @@ D:\ProfilePulse\
 │
 ├── lib/
 │   ├── prisma.ts                     # Prisma singleton using PrismaPg adapter
+│   ├── profile-context.ts            # buildProfileContext(userId) — formats user for AI prompts
 │   ├── utils.ts                      # shadcn cn() helper (clsx + tailwind-merge)
 │   └── generated/
 │       └── prisma/                   # Prisma 7 generated client (gitignored)
@@ -111,7 +130,7 @@ D:\ProfilePulse\
 │   ├── schema.prisma                 # All models + enums
 │   └── seed.ts                       # Seeds default user (id=1) + placeholder data
 │
-├── .env                              # DATABASE_URL — gitignored, never commit
+├── .env                              # DATABASE_URL + ANTHROPIC_API_KEY — gitignored, never commit
 ├── .gitignore
 ├── CLAUDE.md                         # This file — read by Claude Code at session start
 ├── components.json                   # shadcn config (style: base-nova)
@@ -159,11 +178,16 @@ Generated client output: `lib/generated/prisma`
 - `title`, `body`, `source` (optional)
 - `dismissed` Boolean (default false), `createdAt`
 - Relations: belongs to User
+- **How body is used in Session 2:**
+  - TOPIC: `body` = plain text (the "why it's trending" sentence); `source` = `"AI-relevance:N"`
+  - IDEA: `body` = JSON string `{ hook, keyPoints[], cta }`; `source` = `"AI-generated"`
+  - REPOST: `body` = JSON string `{ originalPost, commentSuggestion }`; `source` = `"AI-generated"`
 
 **ActivityLog**
 - `id`, `userId` (FK to User)
 - `action` String, `metadata` String (optional), `date` DateTime
 - Relations: belongs to User
+- **Written by import route:** action = `"CSV_IMPORT"`, metadata = JSON `{ imported, skipped, filename }`
 
 ### Enums
 - `PostSource`: IMPORT | EXTENSION
@@ -178,9 +202,9 @@ Generated client output: `lib/generated/prisma`
 # 1. Install dependencies
 npm install
 
-# 2. Set your database password in .env
-# Edit .env — ensure port is 5433:
+# 2. Set environment variables in .env
 # DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5433/profilepulse?schema=public"
+# ANTHROPIC_API_KEY="sk-ant-..."
 
 # 3. Create the database (in psql or pgAdmin):
 # CREATE DATABASE profilepulse;
@@ -188,7 +212,7 @@ npm install
 # 4. Push schema to the database
 npm run db:push
 
-# 5. Seed with default user and placeholder data
+# 5. Seed with default user
 npm run db:seed
 
 # 6. Start the dev server
@@ -214,16 +238,15 @@ File: `.env` (gitignored — never commit)
 | Variable | Required | Purpose |
 |---|---|---|
 | `DATABASE_URL` | Yes | Prisma database connection string |
+| `ANTHROPIC_API_KEY` | Yes | Powers trends + post ideas generation |
 
-Example value:
+Example:
 ```
 DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5433/profilepulse?schema=public"
+ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
 **Note:** Port is **5433** (non-default). Using 5432 will fail on this machine.
-
-**Planned but NOT yet in codebase:**
-- `ANTHROPIC_API_KEY` — needed for Claude API integration (Session 2+). Not yet referenced anywhere in the project.
 
 ### Supabase migration (future)
 Only change `DATABASE_URL` in `.env` to the Supabase connection string. Nothing else changes.
@@ -254,10 +277,10 @@ Only change `DATABASE_URL` in `.env` to the Supabase connection string. Nothing 
 - `prisma db push` run — all tables exist in local PostgreSQL on port 5433
 - Seed script at `prisma/seed.ts` (creates user id=1, 3 placeholder suggestions, 1 activity log)
 - Dashboard layout with fixed 220px sidebar and sticky topbar
-- Sidebar with 5 nav items, active state highlighting, red dot badge on Trends
+- Sidebar with 5 nav items, active state highlighting
 - 5 pages with placeholder/mock data:
   - `/dashboard` — time-aware greeting (date-fns), 3 stat cards, 3 quick action buttons
-  - `/dashboard/profile` — form with 5 fields (client component, no DB wiring yet)
+  - `/dashboard/profile` — form with 5 fields (client component, no DB wiring)
   - `/dashboard/trends` — 8-row mock trending topics table with relevance badges
   - `/dashboard/post-ideas` — 3 original idea cards + 2 repost suggestion cards
   - `/dashboard/analytics` — 4 recharts charts (bar, horizontal bar, line, radar) with mock data
@@ -268,38 +291,122 @@ Only change `DATABASE_URL` in `.env` to the Supabase connection string. Nothing 
 
 ---
 
-## 10. What Needs to Be Built in Session 2 Onwards
+## 10. What Was Built in Session 2
 
-### Scaffolded but not connected to real data
-- Profile form — UI exists, save does nothing (needs `POST /api/profile`)
-- Dashboard stat cards — show hardcoded numbers
-- Trends page — shows mock data, no live discovery
-- Post Ideas — hardcoded cards, no AI generation
-- Analytics charts — static mock data arrays, no real post metrics
-- All quick action buttons — no functionality
+Session 2 replaced all mock/placeholder data with real functionality. All items below are complete and working.
 
-### Session 2 priorities
-1. Wire profile form to DB — `GET /api/profile` and `POST /api/profile`
-2. LinkedIn CSV import — file upload + papaparse parsing to populate `Post` table
-3. Connect analytics to real data from `Post` table
-4. Add `ANTHROPIC_API_KEY` and Claude API for post idea generation
-5. Build `POST /api/generate-ideas` endpoint
-6. Connect DB Suggestions to Post Ideas page
+### New files created
 
-### Planned but not started
-- `app/api/` directory — no API routes exist yet
-- Claude / Anthropic API — no integration, no key usage
-- LinkedIn CSV import — papaparse installed but unused
-- Real trend discovery
+**`lib/profile-context.ts`**
+- Exports `buildProfileContext(userId: number): Promise<string>`
+- Reads user from DB, returns formatted multi-line string for use in Anthropic prompts
+- Used by both `/api/trends` and `/api/post-ideas`
+
+**`app/api/profile/route.ts`**
+- `GET` — returns User record for id=1
+- `POST` — upserts User record (name, role, industry, tone, topics, postingGoal)
+
+**`app/api/import/route.ts`**
+- `POST` — accepts `multipart/form-data` with a `file` field (CSV only)
+- Uses papaparse to parse, auto-detects LinkedIn CSV column names via a normalised alias map
+- Mapped columns: content, postedAt, likeCount, commentCount, linkedinPostId
+- Deduplicates by `linkedinPostId` if present
+- Writes `Post` records with `source: IMPORT`
+- Writes an `ActivityLog` entry on completion
+- Returns `{ imported, skipped, total }`
+
+**`app/api/trends/route.ts`**
+- `GET` (no params) — returns cached TOPIC `Suggestion` records from DB as `TrendItem[]`
+- `GET ?refresh=true` — calls Anthropic (`claude-sonnet-4-6`), deletes old TOPIC suggestions, saves new ones
+- Each trend: `{ title, why, relevance }` — relevance stored in `source` field as `"AI-relevance:N"`
+
+**`app/api/post-ideas/route.ts`**
+- `GET` (no params) — returns cached IDEA + REPOST `Suggestion` records from DB
+- `GET ?refresh=true` — calls Anthropic (`claude-sonnet-4-6`), deletes old IDEA/REPOST suggestions, saves new ones
+- IDEA body stored as JSON: `{ hook, keyPoints[], cta }`
+- REPOST body stored as JSON: `{ originalPost, commentSuggestion }`
+- Returns `{ originalIdeas[], repostSuggestions[] }`
+
+**`app/dashboard/import/page.tsx`**
+- Client component — drag-and-drop zone + file input (CSV only)
+- Shows selected filename + size
+- Upload button POSTs to `/api/import`
+- Shows success result (`imported / skipped`) or error message
+
+### Updated files
+
+**`app/dashboard/profile/page.tsx`**
+- Now loads profile on mount via `GET /api/profile`
+- Saves via `POST /api/profile`
+- Fields correctly mapped to DB schema: `role` (was "headline"), `industry` (was "targetAudience")
+- Added `tone` field — select with 5 options: professional, casual, thought-leader, storyteller, educational
+- Full loading, saving, and error states
+
+**`app/dashboard/trends/page.tsx`**
+- Converted to client component
+- Fetches from `/api/trends` on load (shows cached)
+- "Refresh Trends" button fetches `/api/trends?refresh=true` → triggers Anthropic call
+- Loading spinner, error banner, empty state with generate prompt
+
+**`app/dashboard/post-ideas/page.tsx`**
+- Converted to client component
+- Fetches from `/api/post-ideas` on load (shows cached)
+- "Generate Ideas" button fetches `/api/post-ideas?refresh=true` → triggers Anthropic call
+- Copy-to-clipboard on each idea card (full text) and repost comment
+- Loading spinner, error banner, empty state with generate prompt
+
+**`app/dashboard/page.tsx`**
+- Now an `async` server component — queries DB directly
+- Stat cards show real data: TOPIC suggestion count today, IDEA suggestion count today, last IMPORT post date
+- Quick action buttons are `<Link>` components navigating to the relevant pages
+
+**`components/dashboard/sidebar.tsx`**
+- Added **Import Data** nav item (Upload icon → `/dashboard/import`)
+- Removed red dot badge from Trends (no longer needed)
+- Now 6 nav items: Dashboard, Profile Setup, Trends, Post Ideas, Import Data, Analytics
+
+---
+
+## 11. Current Status After Session 2
+
+### Real and working
+- Profile form — loads from DB, saves to DB
+- LinkedIn CSV import — file upload, papaparse parsing, deduplication, persists to Post table
+- Trends page — AI-generated via Anthropic, cached in DB, refreshable on demand
+- Post Ideas page — AI-generated via Anthropic, cached in DB, regenerable on demand
+- Dashboard stat cards — real counts from DB (topics today, ideas today, last import date)
+- Dashboard quick actions — navigate to relevant pages
+- `buildProfileContext()` — feeds user profile into every AI prompt
+- ActivityLog written on CSV import
+- TypeScript compiles clean (`tsc --noEmit` passes)
+
+### Still using mock/placeholder data
+- `/dashboard/analytics` — 4 recharts charts still use static mock arrays (not connected to Post table)
+
+### Not yet implemented
+- Analytics connected to real Post data
+- Dismiss suggestion button in UI
 - Comment reply suggestion generation
-- ActivityLog writes from user actions
-- Dismissing suggestions in UI
+- ActivityLog writes beyond CSV import
 - Browser extension data ingestion
 - Supabase deployment
 
 ---
 
-## 11. Project Rules and Coding Conventions
+## 12. Session 3 — Planned: Intelligence Engine Upgrade
+
+Session 3 has not started. Nothing below exists in the codebase yet.
+
+Anticipated work:
+- Connect analytics charts to real Post data from the database
+- Improve AI prompt quality using imported post history as additional context
+- Suggestion dismissal — wire the `dismissed` field to a UI action
+- Comment reply suggestions — surface `needsReply` comments and generate `replySuggestion` via AI
+- ActivityLog UI — display recent actions somewhere in the dashboard
+
+---
+
+## 13. Project Rules and Coding Conventions
 
 1. **Never build LinkedIn auto-posting or autonomous actions.** Read-only and suggestion-only.
 2. **Single-user app** — always assume user id = 1. No auth system planned.
@@ -316,37 +423,6 @@ Only change `DATABASE_URL` in `.env` to the Supabase connection string. Nothing 
 13. **Prisma client import path:**
     - From `lib/` files: `from "./generated/prisma/client"`
     - From `prisma/` scripts: `from "../lib/generated/prisma/client"`
-
----
-
-## 12. Known Gaps / Current Status
-
-### Real and working now
-- Full app scaffolds, routes, and layout render correctly
-- Database schema synced to PostgreSQL (port 5433)
-- All 5 pages render without errors
-- shadcn components styled correctly with Tailwind v3 HSL tokens
-- TypeScript compiles clean (`tsc --noEmit` passes)
-- Prisma client generates successfully
-
-### Placeholder / mock data right now
-- Dashboard stat cards: hardcoded strings
-- Trends table: 8 hardcoded rows
-- Post Ideas: 5 hardcoded cards
-- Analytics charts: static mock data arrays
-- Profile form: client-side state only, no DB persistence
-- All quick action buttons: no-ops
-
-### Not yet implemented
-- `app/api/` — no API routes exist yet
-- Claude / Anthropic API integration
-- LinkedIn CSV import logic (papaparse installed but unused)
-- Real trend discovery
-- Comment reply suggestion generation
-- ActivityLog recording from user actions
-- Supabase deployment
-
-### To be decided
-- Source of trend data (news API vs scraping vs manual input)
-- Whether browser extension is in near-term scope
-- Auth approach if the app ever becomes multi-user
+14. **Anthropic model:** always use `claude-sonnet-4-6`. Do not use other model strings.
+15. **AI calls are server-side only** — never call Anthropic from client components or expose the API key to the browser.
+16. **shadcn Button has no `asChild` prop** — use `<Link>` with inline Tailwind classes for link-as-button patterns.
