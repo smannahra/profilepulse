@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "profilepulse-dev",
-      "runtimeExecutable": "node_modules/.bin/next.cmd",
-      "runtimeArgs": ["dev"],
+      "runtimeExecutable": "cmd.exe",
+      "runtimeArgs": ["/c", "npm run dev"],
       "port": 3000,
       "autoPort": true
     }

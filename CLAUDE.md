@@ -121,6 +121,7 @@ D:\ProfilePulse\
 ├── lib/
 │   ├── prisma.ts                     # Prisma singleton using PrismaPg adapter
 │   ├── profile-context.ts            # buildProfileContext(userId) — formats user for AI prompts
+│   ├── arxiv.ts                      # fetchArxivPapers(keywords, maxResults) — arXiv Atom XML parser
 │   ├── utils.ts                      # shadcn cn() helper (clsx + tailwind-merge)
 │   └── generated/
 │       └── prisma/                   # Prisma 7 generated client (gitignored)
@@ -178,10 +179,15 @@ Generated client output: `lib/generated/prisma`
 - `title`, `body`, `source` (optional)
 - `dismissed` Boolean (default false), `createdAt`
 - Relations: belongs to User
-- **How body is used in Session 2:**
-  - TOPIC: `body` = plain text (the "why it's trending" sentence); `source` = `"AI-relevance:N"`
-  - IDEA: `body` = JSON string `{ hook, keyPoints[], cta }`; `source` = `"AI-generated"`
-  - REPOST: `body` = JSON string `{ originalPost, commentSuggestion }`; `source` = `"AI-generated"`
+- **How body is used — current (Session 3):**
+  - TOPIC (web trend): `body` = JSON `{ why, angle, sourceDetail, relevance }`; `source` = `"NEWS" | "TWITTER" | "LINKEDIN" | "HACKERNEWS" | "WEB"`
+  - TOPIC (arXiv paper): `body` = JSON `{ plainSummary, linkedinAngle, url, publishedAt }`; `source` = `"ARXIV"`
+  - IDEA: `body` = JSON `{ hook, keyPoints[], callToAction, inspiredBy, inspiredBySource, whyNow }`; `source` = inspiredBySource value
+  - REPOST: `body` = JSON `{ whatToFind, whereToSearch, commentToAdd, whyGoodForBrand }`; `source` = `"AI-generated"`
+- **Legacy Session 2 formats** (still read gracefully via try/catch fallback):
+  - TOPIC: `body` = plain string; `source` = `"AI-relevance:N"`
+  - IDEA: `body` = JSON `{ hook, keyPoints[], cta }`
+  - REPOST: `body` = JSON `{ originalPost, commentSuggestion }`
 
 **ActivityLog**
 - `id`, `userId` (FK to User)
@@ -393,16 +399,108 @@ Session 2 replaced all mock/placeholder data with real functionality. All items 
 
 ---
 
-## 12. Session 3 — Planned: Intelligence Engine Upgrade
+## 12. What Was Built in Session 3
 
-Session 3 has not started. Nothing below exists in the codebase yet.
+Session 3 upgraded the intelligence engine. No new pages were created; no schema was changed.
+
+### New file
+
+**`lib/arxiv.ts`**
+- Exports `fetchArxivPapers(keywords: string[], maxResults?: number): Promise<ArxivPaper[]>`
+- Calls `https://export.arxiv.org/api/query` (no API key required)
+- Query built from user profile topics; sorted by `submittedDate` descending
+- Parses the Atom XML response using pure string extraction — no XML library added
+- Extracts: title, summary (truncated to 600 chars), authors (up to 3), publishedAt, url (https, version-stripped), category
+- 12-second fetch timeout via `AbortSignal.timeout`
+- On any error: logs and returns `[]`
+- Debug log: `[ProfilePulse] Fetching arXiv papers:` + URL
+
+### Upgraded: `app/api/trends/route.ts`
+
+New exports: `TrendItem`, `ArxivSummary`, `TrendsResponse` (used by post-ideas route + pages)
+
+**`?refresh=true` flow (5 steps):**
+1. `buildProfileContext(1)` — reads user profile
+2. **Parallel:** `fetchArxivPapers(keywords, 5)` + `discoverWebTrends(profileContext)`
+   - `discoverWebTrends` calls Claude with `tools: [{ type: "web_search_20250305" }]` — server-side built-in tool; Anthropic executes searches
+   - Falls back to `discoverTrendsFallback` (no web_search) if the tool call fails
+3. `summariseArxivPapers` — second Claude call to produce `plainSummary` + `linkedinAngle` per paper
+4. Deletes all existing TOPIC suggestions; saves web trends (source = NEWS/TWITTER/LINKEDIN/HACKERNEWS/WEB) and arXiv papers (source = ARXIV)
+5. Returns `{ trends, arxivPapers, generatedAt }`
+
+**Cached fetch (no param):** Loads TOPIC suggestions from DB, splits by source === "ARXIV" vs others, returns same shape. Auto-refreshes if DB is empty.
+
+**Backward-compatible:** handles old Session 2 plain-string body format via try/catch.
+
+### Upgraded: `app/api/post-ideas/route.ts`
+
+New types: `OriginalIdea` (adds `callToAction`, `inspiredBy`, `inspiredBySource`, `whyNow`), `RepostSuggestion` (now `whatToFind`, `whereToSearch`, `commentToAdd`, `whyGoodForBrand`)
+
+**`?refresh=true` flow:**
+1. Loads current TOPIC suggestions from DB (up to 20, any date) as trend signals + arXiv papers
+2. Builds a grounded Claude prompt listing both trend signals and research papers
+3. Generates 3 original ideas + 2 repost suggestions anchored to real signals
+4. Saves with richer JSON bodies; backward-compatible read for old REPOST/IDEA formats
+
+### Upgraded: `app/dashboard/trends/page.tsx`
+
+Two distinct sections:
+- **Trending Now** — web trends in card layout; shows title, why, "Your Angle" highlight box (amber), source badge (NEWS/TWITTER/LINKEDIN/HN/WEB), relevance badge
+- **From Research** — arXiv paper cards in 2-col grid; shows title, "In Plain English" summary, "LinkedIn Angle" highlight box (purple), "Read paper on arXiv" link, published date
+
+Added: animated skeleton loaders, "Last updated X ago" timestamp, source badge component with per-source colours.
+
+### Upgraded: `app/dashboard/post-ideas/page.tsx`
+
+Original idea cards now show:
+- Inspired-by chip (coloured by source type)
+- "Copy Hook" button (copies hook only)
+- "Copy Full Post" button (copies hook + bullets + CTA)
+- "Why Post Now" highlight box (green)
+
+Repost section renamed **"What to Find & Repost"**; cards now show:
+- What to Find
+- Where to Search (with Search icon)
+- Comment to Add + "Copy Comment" button
+- "Why This Builds Your Brand" highlight box (blue)
+
+---
+
+## 13. Current Status After Session 3
+
+### Real and working
+- arXiv research paper fetch + plain-English summarisation
+- Web trend discovery via Claude + `web_search_20250305` (with fallback)
+- Trends page: two sections (Trending Now + From Research), source badges, last-updated timestamp, skeletons
+- Post ideas grounded in trend signals + research papers
+- Post idea cards: inspired-by chip, copy hook, copy full post, why-now box
+- Repost suggestions: find/search/comment/brand-value format
+- All Session 2 features still working (profile, import, analytics mock, dashboard stats)
+- TypeScript compiles clean (`tsc --noEmit` passes)
+
+### Still using mock/placeholder data
+- `/dashboard/analytics` — 4 recharts charts still use static mock arrays
+
+### Not yet implemented
+- Analytics connected to real Post data
+- Dismiss suggestion UI (field exists in DB schema, not wired to UI)
+- Comment reply suggestion generation
+- ActivityLog writes beyond CSV import
+- Browser extension data ingestion
+- Supabase deployment
+
+---
+
+## 14. Session 4 — Planned
+
+Nothing below exists in the codebase yet.
 
 Anticipated work:
-- Connect analytics charts to real Post data from the database
-- Improve AI prompt quality using imported post history as additional context
-- Suggestion dismissal — wire the `dismissed` field to a UI action
-- Comment reply suggestions — surface `needsReply` comments and generate `replySuggestion` via AI
-- ActivityLog UI — display recent actions somewhere in the dashboard
+- Connect analytics charts to real Post data from the `Post` table
+- Dismiss suggestion — wire `dismissed: true` PATCH to all suggestion cards
+- Comment reply suggestions — surface `needsReply` comments and call Claude for `replySuggestion`
+- ActivityLog UI — recent actions feed on the dashboard
+- Improve arXiv query by deriving better keywords from profile topics
 
 ---
 
