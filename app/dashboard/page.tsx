@@ -1,7 +1,17 @@
 import { format } from "date-fns";
-import { TrendingUp, Lightbulb, Download, RefreshCw, Zap, Upload } from "lucide-react";
+import Link from "next/link";
+import {
+  TrendingUp,
+  Lightbulb,
+  Download,
+  RefreshCw,
+  Zap,
+  Upload,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { prisma } from "@/lib/prisma";
+
+const USER_ID = 1;
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -10,35 +20,70 @@ function getGreeting() {
   return "Good evening";
 }
 
-const statCards = [
-  {
-    title: "Trends Today",
-    value: "8",
-    description: "topics trending in your industry",
-    icon: TrendingUp,
-    color: "text-blue-500",
-    bg: "bg-blue-50",
-  },
-  {
-    title: "New Post Ideas",
-    value: "5",
-    description: "AI-generated ideas ready to review",
-    icon: Lightbulb,
-    color: "text-amber-500",
-    bg: "bg-amber-50",
-  },
-  {
-    title: "Last Export Date",
-    value: "—",
-    description: "No LinkedIn export imported yet",
-    icon: Download,
-    color: "text-purple-500",
-    bg: "bg-purple-50",
-  },
-];
+async function getDashboardStats() {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
 
-export default function DashboardPage() {
+  const [topicCount, ideaCount, lastImport] = await Promise.all([
+    prisma.suggestion.count({
+      where: { userId: USER_ID, type: "TOPIC", createdAt: { gte: todayStart } },
+    }),
+    prisma.suggestion.count({
+      where: { userId: USER_ID, type: "IDEA", createdAt: { gte: todayStart } },
+    }),
+    prisma.post.findFirst({
+      where: { userId: USER_ID, source: "IMPORT" },
+      orderBy: { postedAt: "desc" },
+      select: { postedAt: true },
+    }),
+  ]);
+
+  return { topicCount, ideaCount, lastImport };
+}
+
+export default async function DashboardPage() {
   const today = format(new Date(), "EEEE, MMMM d, yyyy");
+  const { topicCount, ideaCount, lastImport } = await getDashboardStats();
+
+  const lastImportLabel = lastImport
+    ? format(new Date(lastImport.postedAt), "MMM d, yyyy")
+    : "—";
+  const lastImportDesc = lastImport
+    ? "most recent imported post"
+    : "No LinkedIn export imported yet";
+
+  const statCards = [
+    {
+      title: "Trends Today",
+      value: topicCount > 0 ? String(topicCount) : "—",
+      description:
+        topicCount > 0
+          ? "topics trending in your industry"
+          : "Click Refresh Trends to generate",
+      icon: TrendingUp,
+      color: "text-blue-500",
+      bg: "bg-blue-50",
+    },
+    {
+      title: "New Post Ideas",
+      value: ideaCount > 0 ? String(ideaCount) : "—",
+      description:
+        ideaCount > 0
+          ? "AI-generated ideas ready to review"
+          : "Click Generate Ideas to create some",
+      icon: Lightbulb,
+      color: "text-amber-500",
+      bg: "bg-amber-50",
+    },
+    {
+      title: "Last Import",
+      value: lastImportLabel,
+      description: lastImportDesc,
+      icon: Download,
+      color: "text-purple-500",
+      bg: "bg-purple-50",
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -76,30 +121,29 @@ export default function DashboardPage() {
           Quick Actions
         </h2>
         <div className="flex flex-wrap gap-3">
-          <Button variant="outline" className="gap-2">
+          <Link
+            href="/dashboard/trends"
+            className="inline-flex items-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+          >
             <RefreshCw className="h-4 w-4" />
             Refresh Trends
-          </Button>
-          <Button variant="outline" className="gap-2">
+          </Link>
+          <Link
+            href="/dashboard/post-ideas"
+            className="inline-flex items-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+          >
             <Zap className="h-4 w-4" />
             Generate Posts
-          </Button>
-          <Button variant="outline" className="gap-2">
+          </Link>
+          <Link
+            href="/dashboard/import"
+            className="inline-flex items-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+          >
             <Upload className="h-4 w-4" />
             Upload LinkedIn Export
-          </Button>
+          </Link>
         </div>
       </div>
-
-      {/* Status Banner */}
-      <Card className="border-dashed border-2 border-muted bg-transparent">
-        <CardContent className="py-6 text-center text-muted-foreground">
-          <p className="text-sm">
-            This is your MVP dashboard. Data is currently placeholder — connect
-            your LinkedIn export and configure your profile to get started.
-          </p>
-        </CardContent>
-      </Card>
     </div>
   );
 }

@@ -8,9 +8,9 @@ import {
   TrendingUp,
   Lightbulb,
   BarChart2,
+  Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 
 const navItems = [
   {
@@ -29,12 +29,18 @@ const navItems = [
     label: "Trends",
     href: "/dashboard/trends",
     icon: TrendingUp,
-    badge: "new",
+    badge: null,
   },
   {
     label: "Post Ideas",
     href: "/dashboard/post-ideas",
     icon: Lightbulb,
+    badge: null,
+  },
+  {
+    label: "Import Data",
+    href: "/dashboard/import",
+    icon: Upload,
     badge: null,
   },
   {

@@ -1,34 +1,111 @@
 "use client";
 
-import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useState, useEffect } from "react";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Save, CheckCircle } from "lucide-react";
+import { Save, CheckCircle, Loader2 } from "lucide-react";
+
+type ProfileForm = {
+  name: string;
+  role: string;
+  industry: string;
+  tone: string;
+  topics: string;
+  postingGoal: string;
+};
+
+const TONE_OPTIONS = [
+  { value: "professional", label: "Professional" },
+  { value: "casual", label: "Casual & Conversational" },
+  { value: "thought-leader", label: "Thought Leader" },
+  { value: "storyteller", label: "Storyteller" },
+  { value: "educational", label: "Educational" },
+];
 
 export default function ProfilePage() {
   const [saved, setSaved] = useState(false);
-  const [form, setForm] = useState({
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [form, setForm] = useState<ProfileForm>({
     name: "",
-    headline: "",
+    role: "",
+    industry: "",
+    tone: "professional",
     topics: "",
-    targetAudience: "",
     postingGoal: "",
   });
 
+  useEffect(() => {
+    async function loadProfile() {
+      try {
+        const res = await fetch("/api/profile");
+        if (res.ok) {
+          const data = await res.json();
+          setForm({
+            name: data.name ?? "",
+            role: data.role ?? "",
+            industry: data.industry ?? "",
+            tone: data.tone ?? "professional",
+            topics: data.topics ?? "",
+            postingGoal: data.postingGoal ?? "",
+          });
+        }
+      } catch {
+        // If loading fails, just show the empty form
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadProfile();
+  }, []);
+
   function handleChange(
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
   ) {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
     setSaved(false);
+    setError(null);
   }
 
   async function handleSave() {
-    // In Session 2 this will call a real API route to persist to the DB
-    await new Promise((r) => setTimeout(r, 400));
-    setSaved(true);
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const res = await fetch("/api/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error ?? "Failed to save profile");
+      }
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save profile");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-48">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
   }
 
   return (
@@ -60,16 +137,46 @@ export default function ProfilePage() {
             />
           </div>
 
-          {/* Headline */}
+          {/* Role / Headline */}
           <div className="space-y-1.5">
-            <Label htmlFor="headline">LinkedIn Headline</Label>
+            <Label htmlFor="role">LinkedIn Headline / Role</Label>
             <Input
-              id="headline"
-              name="headline"
+              id="role"
+              name="role"
               placeholder="e.g. Senior Data Scientist | ML Engineer | Speaker"
-              value={form.headline}
+              value={form.role}
               onChange={handleChange}
             />
+          </div>
+
+          {/* Industry / Target Audience */}
+          <div className="space-y-1.5">
+            <Label htmlFor="industry">Industry / Target Audience</Label>
+            <Input
+              id="industry"
+              name="industry"
+              placeholder="e.g. Technology, Data leaders, ML engineers"
+              value={form.industry}
+              onChange={handleChange}
+            />
+          </div>
+
+          {/* Tone */}
+          <div className="space-y-1.5">
+            <Label htmlFor="tone">Writing Tone</Label>
+            <select
+              id="tone"
+              name="tone"
+              value={form.tone}
+              onChange={handleChange}
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              {TONE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Topics */}
@@ -88,18 +195,6 @@ export default function ProfilePage() {
             </p>
           </div>
 
-          {/* Target Audience */}
-          <div className="space-y-1.5">
-            <Label htmlFor="targetAudience">Target Audience</Label>
-            <Input
-              id="targetAudience"
-              name="targetAudience"
-              placeholder="e.g. Data leaders, ML engineers, tech recruiters"
-              value={form.targetAudience}
-              onChange={handleChange}
-            />
-          </div>
-
           {/* Posting Goal */}
           <div className="space-y-1.5">
             <Label htmlFor="postingGoal">Professional Goal on LinkedIn</Label>
@@ -113,10 +208,18 @@ export default function ProfilePage() {
             />
           </div>
 
+          {error && (
+            <p className="text-sm text-destructive">{error}</p>
+          )}
+
           <div className="flex items-center gap-3 pt-2">
-            <Button onClick={handleSave} className="gap-2">
-              <Save className="h-4 w-4" />
-              Save Profile
+            <Button onClick={handleSave} disabled={saving} className="gap-2">
+              {saving ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
+              {saving ? "Saving…" : "Save Profile"}
             </Button>
             {saved && (
               <span className="flex items-center gap-1.5 text-sm text-green-600">
@@ -127,11 +230,6 @@ export default function ProfilePage() {
           </div>
         </CardContent>
       </Card>
-
-      <p className="text-xs text-muted-foreground">
-        <strong>Session 2:</strong> This form will persist to the database and
-        pre-populate from your saved profile.
-      </p>
     </div>
   );
 }
