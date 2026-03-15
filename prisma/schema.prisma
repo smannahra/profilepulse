@@ -1,0 +1,92 @@
+// ProfilePulse — Prisma Schema
+// Migration to Supabase: only change DATABASE_URL in .env to your Supabase
+// connection string. No schema changes needed.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id          Int           @id @default(autoincrement())
+  name        String        @default("")
+  email       String        @unique @default("")
+  role        String        @default("")
+  industry    String        @default("")
+  tone        String        @default("professional")
+  topics      String        @default("") // comma-separated
+  postingGoal String        @default("")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  posts       Post[]
+  suggestions Suggestion[]
+  activityLog ActivityLog[]
+}
+
+model Post {
+  id             Int        @id @default(autoincrement())
+  userId         Int
+  linkedinPostId String?    @unique
+  content        String
+  postedAt       DateTime
+  likeCount      Int        @default(0)
+  commentCount   Int        @default(0)
+  synced         Boolean    @default(false)
+  source         PostSource @default(IMPORT)
+  createdAt      DateTime   @default(now())
+
+  user     User      @relation(fields: [userId], references: [id])
+  comments Comment[]
+}
+
+model Comment {
+  id              Int      @id @default(autoincrement())
+  postId          Int
+  authorName      String
+  content         String
+  createdAt       DateTime @default(now())
+  needsReply      Boolean  @default(true)
+  replySuggestion String?
+  replied         Boolean  @default(false)
+
+  post Post @relation(fields: [postId], references: [id])
+}
+
+model Suggestion {
+  id        Int            @id @default(autoincrement())
+  userId    Int
+  type      SuggestionType
+  title     String
+  body      String
+  source    String?
+  dismissed Boolean        @default(false)
+  createdAt DateTime       @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model ActivityLog {
+  id       Int      @id @default(autoincrement())
+  userId   Int
+  action   String
+  metadata String?
+  date     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+enum PostSource {
+  IMPORT
+  EXTENSION
+}
+
+enum SuggestionType {
+  IDEA
+  REPOST
+  TOPIC
+}
